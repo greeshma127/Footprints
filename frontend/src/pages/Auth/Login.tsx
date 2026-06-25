@@ -1,7 +1,9 @@
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import api from "../../services/api";
 
 function Login() {
+  const navigate = useNavigate();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -19,7 +21,10 @@ function Login() {
       });
 
       console.log(response.data);
+      localStorage.setItem("footprints_token", response.data.token);
+      localStorage.setItem("footprints_user", JSON.stringify(response.data.user));
       setMessage("Welcome back. Your map is ready.");
+      navigate("/dashboard");
     } catch (error) {
       console.error(error);
       setMessage("Login failed. Check your details and try again.");
