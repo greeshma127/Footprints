@@ -20,11 +20,33 @@ type VisitedPlace = {
   visitDate: string;
   notes: string;
   imageUrl?: string;
+  cityLocations: CityLocation[];
 };
 
 type ApiVisitedPlace = Omit<VisitedPlace, "latitude" | "longitude"> & {
   latitude: number | string;
   longitude: number | string;
+  city_locations?: CityLocation[];
+};
+
+type CityLocation = {
+  id: string;
+  name: string;
+  category: string;
+  timeOfVisit: string;
+  duration: string;
+  review: string;
+  photoUrl?: string;
+};
+
+type CityLocationForm = {
+  id: string;
+  name: string;
+  category: string;
+  timeOfVisit: string;
+  duration: string;
+  review: string;
+  photoUrl: string;
 };
 
 type PlaceForm = {
@@ -35,6 +57,7 @@ type PlaceForm = {
   visitDate: string;
   notes: string;
   imageUrl: string;
+  cityLocations: CityLocationForm[];
 };
 
 type CountryCityOption = {
@@ -66,7 +89,26 @@ const emptyForm: PlaceForm = {
   visitDate: "",
   notes: "",
   imageUrl: "",
+  cityLocations: [],
 };
+
+function createId() {
+  return typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function createEmptyCityLocation(): CityLocationForm {
+  return {
+    id: createId(),
+    name: "",
+    category: "",
+    timeOfVisit: "",
+    duration: "",
+    review: "",
+    photoUrl: "",
+  };
+}
 
 function formatDate(date: string) {
   if (!date) {
@@ -105,10 +147,21 @@ function toDateInputValue(date: string) {
 }
 
 function normalizePlace(place: ApiVisitedPlace): VisitedPlace {
+  const rawCityLocations = place.cityLocations || place.city_locations || [];
+
   return {
     ...place,
     latitude: Number(place.latitude),
     longitude: Number(place.longitude),
+    cityLocations: rawCityLocations.map((location) => ({
+      id: location.id || createId(),
+      name: location.name,
+      category: location.category,
+      timeOfVisit: location.timeOfVisit,
+      duration: location.duration,
+      review: location.review,
+      photoUrl: location.photoUrl,
+    })),
   };
 }
 
@@ -321,6 +374,10 @@ function UserDashboard() {
       visitDate: toDateInputValue(place.visitDate),
       notes: place.notes,
       imageUrl: place.imageUrl || "",
+      cityLocations: place.cityLocations.map((location) => ({
+        ...location,
+        photoUrl: location.photoUrl || "",
+      })),
     });
     setFormError("");
     setIsModalOpen(true);
@@ -356,6 +413,29 @@ function UserDashboard() {
     setPlaceLookupMessage("");
   };
 
+  const addCityLocation = () => {
+    setForm((currentForm) => ({
+      ...currentForm,
+      cityLocations: [...currentForm.cityLocations, createEmptyCityLocation()],
+    }));
+  };
+
+  const updateCityLocation = (locationId: string, field: keyof CityLocationForm, value: string) => {
+    setForm((currentForm) => ({
+      ...currentForm,
+      cityLocations: currentForm.cityLocations.map((location) =>
+        location.id === locationId ? { ...location, [field]: value } : location
+      ),
+    }));
+  };
+
+  const removeCityLocation = (locationId: string) => {
+    setForm((currentForm) => ({
+      ...currentForm,
+      cityLocations: currentForm.cityLocations.filter((location) => location.id !== locationId),
+    }));
+  };
+
   const handleSubmitPlace = async (event: React.FormEvent) => {
     event.preventDefault();
     setFormError("");
@@ -378,6 +458,26 @@ function UserDashboard() {
       return;
     }
 
+    const cityLocations = form.cityLocations.map((location) => ({
+      id: location.id,
+      name: location.name.trim(),
+      category: location.category.trim(),
+      timeOfVisit: location.timeOfVisit,
+      duration: location.duration.trim(),
+      review: location.review.trim(),
+      photoUrl: location.photoUrl.trim() || undefined,
+    }));
+
+    const hasIncompleteCityLocation = cityLocations.some(
+      (location) =>
+        !location.name || !location.category || !location.timeOfVisit || !location.duration || !location.review
+    );
+
+    if (hasIncompleteCityLocation) {
+      setFormError("Each city location needs a name, type, time of visit, duration, and review.");
+      return;
+    }
+
     const placePayload = {
       city: form.city.trim(),
       country: form.country.trim(),
@@ -386,6 +486,7 @@ function UserDashboard() {
       visitDate: form.visitDate,
       notes: form.notes.trim(),
       imageUrl: form.imageUrl.trim() || undefined,
+      cityLocations,
     };
 
     setIsSavingPlace(true);
@@ -393,8 +494,11 @@ function UserDashboard() {
     try {
       const response = editingPlaceId
         ? await api.put<{ location: ApiVisitedPlace }>(`/api/locations/${editingPlaceId}`, placePayload)
-        : await api.post<{ location: ApiVisitedPlace }>("/api/locations", placePayload);
-      const savedPlace = normalizePlace(response.data.location);
+          : await api.post<{ location: ApiVisitedPlace }>("/api/locations", placePayload);
+      const savedPlace = {
+        ...normalizePlace(response.data.location),
+        cityLocations,
+      };
 
       setVisitedPlaces((currentPlaces) =>
         editingPlaceId
@@ -688,6 +792,25 @@ function UserDashboard() {
           margin-top: 8px;
         }
 
+        .popup-locations {
+          margin-top: 10px;
+          display: grid;
+          gap: 6px;
+        }
+
+        .popup-locations strong {
+          color: #1e2c28;
+          font-size: 13px;
+        }
+
+        .popup-locations ul {
+          margin: 0;
+          padding-left: 16px;
+          color: #52645f;
+          font-size: 12px;
+          line-height: 1.35;
+        }
+
         .timeline-panel {
           max-height: 560px;
           overflow: hidden;
@@ -764,6 +887,17 @@ function UserDashboard() {
           color: #66766f;
           font-size: 13px;
           line-height: 1.4;
+        }
+
+        .timeline-location-count {
+          display: inline-flex;
+          margin-top: 8px;
+          border-radius: 999px;
+          padding: 4px 8px;
+          color: #2f6f5e;
+          background: #e8f3ee;
+          font-size: 12px;
+          font-weight: 750;
         }
 
         .timeline-actions {
@@ -933,6 +1067,60 @@ function UserDashboard() {
           line-height: 1.45;
         }
 
+        .city-locations-section {
+          display: grid;
+          gap: 12px;
+          border-top: 1px solid rgba(36, 51, 47, 0.08);
+          padding-top: 4px;
+        }
+
+        .city-locations-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 14px;
+        }
+
+        .city-locations-header h3 {
+          margin: 0;
+          color: #1e2c28;
+          font-size: 17px;
+          line-height: 1.2;
+        }
+
+        .city-locations-header p {
+          margin: 4px 0 0;
+          color: #66766f;
+          font-size: 13px;
+          line-height: 1.4;
+        }
+
+        .city-location-list {
+          display: grid;
+          gap: 12px;
+        }
+
+        .city-location-card {
+          display: grid;
+          gap: 12px;
+          border: 1px solid rgba(36, 51, 47, 0.1);
+          border-radius: 8px;
+          padding: 14px;
+          background: #fbfcfa;
+        }
+
+        .city-location-card-header {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 12px;
+        }
+
+        .city-location-card-header strong {
+          color: #1e2c28;
+          font-size: 14px;
+        }
+
         .modal-actions {
           display: flex;
           justify-content: flex-end;
@@ -1080,6 +1268,18 @@ function UserDashboard() {
                     <p className="popup-meta">{formatDate(place.visitDate)}</p>
                     <p className="popup-notes">{place.notes}</p>
                     {place.imageUrl && <img className="popup-image" src={place.imageUrl} alt={`${place.city} memory`} />}
+                    {place.cityLocations.length > 0 && (
+                      <div className="popup-locations">
+                        <strong>Places visited in {place.city}</strong>
+                        <ul>
+                          {place.cityLocations.slice(0, 4).map((location) => (
+                            <li key={location.id}>
+                              {location.name} ({location.category}) at {location.timeOfVisit}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
                   </Popup>
                 </Marker>
               ))}
@@ -1116,6 +1316,9 @@ function UserDashboard() {
                     </strong>
                     <span className="timeline-date">{formatDate(place.visitDate)}</span>
                     <p className="timeline-notes">{place.notes}</p>
+                    <span className="timeline-location-count">
+                      {place.cityLocations.length} {place.cityLocations.length === 1 ? "city stop" : "city stops"}
+                    </span>
                     <div className="timeline-actions">
                       <button
                         className="small-button"
@@ -1261,6 +1464,96 @@ function UserDashboard() {
                   />
                 </div>
               </div>
+
+              <section className="city-locations-section" aria-label="Locations visited within the city">
+                <div className="city-locations-header">
+                  <div>
+                    <h3>Locations within the city</h3>
+                    <p>Add landmarks, restaurants, museums, cafes, stays, or any memorable stop.</p>
+                  </div>
+                  <button className="button" type="button" onClick={addCityLocation}>
+                    Add location
+                  </button>
+                </div>
+
+                {form.cityLocations.length > 0 && (
+                  <div className="city-location-list">
+                    {form.cityLocations.map((location, index) => (
+                      <div className="city-location-card" key={location.id}>
+                        <div className="city-location-card-header">
+                          <strong>City location {index + 1}</strong>
+                          <button className="small-button danger" type="button" onClick={() => removeCityLocation(location.id)}>
+                            Remove
+                          </button>
+                        </div>
+
+                        <div className="form-grid">
+                          <div className="field">
+                            <label htmlFor={`location-name-${location.id}`}>Name</label>
+                            <input
+                              id={`location-name-${location.id}`}
+                              value={location.name}
+                              onChange={(event) => updateCityLocation(location.id, "name", event.target.value)}
+                              placeholder="Eiffel Tower"
+                            />
+                          </div>
+
+                          <div className="field">
+                            <label htmlFor={`location-category-${location.id}`}>Type</label>
+                            <input
+                              id={`location-category-${location.id}`}
+                              value={location.category}
+                              onChange={(event) => updateCityLocation(location.id, "category", event.target.value)}
+                              placeholder="Landmark, restaurant, museum"
+                            />
+                          </div>
+
+                          <div className="field">
+                            <label htmlFor={`location-time-${location.id}`}>Time of visit</label>
+                            <input
+                              id={`location-time-${location.id}`}
+                              type="time"
+                              value={location.timeOfVisit}
+                              onChange={(event) => updateCityLocation(location.id, "timeOfVisit", event.target.value)}
+                            />
+                          </div>
+
+                          <div className="field">
+                            <label htmlFor={`location-duration-${location.id}`}>Duration</label>
+                            <input
+                              id={`location-duration-${location.id}`}
+                              value={location.duration}
+                              onChange={(event) => updateCityLocation(location.id, "duration", event.target.value)}
+                              placeholder="2 hours"
+                            />
+                          </div>
+
+                          <div className="field full">
+                            <label htmlFor={`location-photo-${location.id}`}>Photo upload URL</label>
+                            <input
+                              id={`location-photo-${location.id}`}
+                              type="url"
+                              value={location.photoUrl}
+                              onChange={(event) => updateCityLocation(location.id, "photoUrl", event.target.value)}
+                              placeholder="Optional"
+                            />
+                          </div>
+
+                          <div className="field full">
+                            <label htmlFor={`location-review-${location.id}`}>Review or opinion</label>
+                            <textarea
+                              id={`location-review-${location.id}`}
+                              value={location.review}
+                              onChange={(event) => updateCityLocation(location.id, "review", event.target.value)}
+                              placeholder="What did you think of this stop?"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
 
               {placeLookupMessage && <p className="lookup-message">{placeLookupMessage}</p>}
               {formError && <p className="form-error">{formError}</p>}

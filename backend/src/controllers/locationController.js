@@ -21,7 +21,78 @@ const validateLocation=(body)=>{
     return null;
 };
 
+const validateCityLocation=(body)=>{
+    const {name,category,timeOfVisit,duration,review}=body;
+
+    if(!name||!category||!timeOfVisit||!duration||!review){
+        return "Name,category,time of visit,duration and review are required";
+    }
+
+    return null;
+};
+
+const validateCityLocations=(cityLocations=[])=>{
+    if(!Array.isArray(cityLocations)){
+        return "City locations must be an array";
+    }
+
+    for(const cityLocation of cityLocations){
+        const error=validateCityLocation(cityLocation);
+
+        if(error){
+            return error;
+        }
+    }
+
+    return null;
+};
+
+const insertCityLocations=async(client,locationId,cityLocations=[])=>{
+    const insertedCityLocations=[];
+
+    for(const cityLocation of cityLocations){
+        const {name,category,timeOfVisit,duration,review,photoUrl}=cityLocation;
+
+        const result=await client.query(
+            `
+            INSERT INTO visited_city_locations
+            (visited_location_id,name,category,time_of_visit,duration,review,photo_url)
+            VALUES ($1,$2,$3,$4,$5,$6,$7)
+            RETURNING id,visited_location_id AS "visitedLocationId",name,category,time_of_visit AS "timeOfVisit",duration,review,photo_url AS "photoUrl",created_at AS "createdAt",updated_at AS "updatedAt"`,
+            [locationId,name,category,timeOfVisit,duration,review,photoUrl||null]
+        );
+
+        insertedCityLocations.push(result.rows[0]);
+    }
+
+    return insertedCityLocations;
+};
+
+const getCityLocationsForLocation=async(locationId)=>{
+    const result=await pool.query(
+        `
+        SELECT id,visited_location_id AS "visitedLocationId",name,category,time_of_visit AS "timeOfVisit",duration,review,photo_url AS "photoUrl",created_at AS "createdAt",updated_at AS "updatedAt"
+        FROM visited_city_locations
+        WHERE visited_location_id=$1
+        ORDER BY time_of_visit ASC`,
+        [locationId]
+    );
+
+    return result.rows;
+};
+
+const attachCityLocations=async(locations)=>{
+    return Promise.all(
+        locations.map(async(location)=>({
+            ...location,
+            cityLocations:await getCityLocationsForLocation(location.id),
+        }))
+    );
+};
+
 const addLocation=async(req,res)=>{
+    const client=await pool.connect();
+
     try{
         const error=validateLocation(req.body);
 
@@ -32,9 +103,20 @@ const addLocation=async(req,res)=>{
             });
         }
 
-        const {city,country,latitude,longitude,visitDate,notes,imageUrl}=req.body;
+        const cityLocationsError=validateCityLocations(req.body.cityLocations||[]);
 
-        const result=await pool.query(`INSERT INTO visited_locations (user_id,city,country,latitude,longitude,visit_date,notes,image_url)
+        if(cityLocationsError){
+            return res.status(400).json({
+                success:false,
+                message:cityLocationsError,
+            });
+        }
+
+        const {city,country,latitude,longitude,visitDate,notes,imageUrl,cityLocations=[]}=req.body;
+
+        await client.query("BEGIN");
+
+        const result=await client.query(`INSERT INTO visited_locations (user_id,city,country,latitude,longitude,visit_date,notes,image_url)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
             RETURNING id,city,country,latitude,longitude,visit_date AS "visitDate",notes,image_url AS "imageUrl",created_at AS "createdAt",updated_at AS "updatedAt"`,
         [
@@ -48,18 +130,28 @@ const addLocation=async(req,res)=>{
             imageUrl||null,
         ]);
 
+        const insertedCityLocations=await insertCityLocations(client,result.rows[0].id,cityLocations);
+
+        await client.query("COMMIT");
+
         return res.status(201).json({
             success:true,
             message:"Location added successfully",
-            location:result.rows[0],
+            location:{
+                ...result.rows[0],
+                cityLocations:insertedCityLocations,
+            },
         });
     } catch(error){
+        await client.query("ROLLBACK");
         console.error("Add location error:",error);
 
         return res.status(500).json({
             success:false,
             message:"Failed to add location",
         });
+    } finally {
+        client.release();
     }
 };
 
@@ -72,9 +164,11 @@ const getLocations=async(req,res)=>{
             FROM visited_locations WHERE user_id=$1 ORDER BY visit_date DESC`, [req.user.id]
         );
 
+        const locations=await attachCityLocations(result.rows);
+
         return res.status(200).json({
             success:true,
-            locations:result.rows,
+            locations,
         });
     } catch(error){
         console.error("Get locations error:",error);
@@ -101,9 +195,14 @@ const getLocationById=async(req,res)=>{
             });
         }
 
+        const cityLocations=await getCityLocationsForLocation(result.rows[0].id);
+
         return res.status(200).json({
             success:true,
-            location:result.rows[0],
+            location:{
+                ...result.rows[0],
+                cityLocations,
+            },
         });
     } catch(error){
         console.error("Get location error:",error);
@@ -116,6 +215,8 @@ const getLocationById=async(req,res)=>{
 };
 
 const updateLocation=async(req,res)=>{
+    const client=await pool.connect();
+
     try{
         const error=validateLocation(req.body);
 
@@ -126,9 +227,20 @@ const updateLocation=async(req,res)=>{
             });
         }
 
-        const {city,country,latitude,longitude,visitDate,notes,imageUrl}=req.body;
+        const cityLocationsError=validateCityLocations(req.body.cityLocations||[]);
 
-        const result=await pool.query(
+        if(cityLocationsError){
+            return res.status(400).json({
+                success:false,
+                message:cityLocationsError,
+            });
+        }
+
+        const {city,country,latitude,longitude,visitDate,notes,imageUrl,cityLocations=[]}=req.body;
+
+        await client.query("BEGIN");
+
+        const result=await client.query(
             `
             UPDATE visited_locations
             SET 
@@ -146,24 +258,40 @@ const updateLocation=async(req,res)=>{
         );
 
         if(result.rows.length===0){
+            await client.query("ROLLBACK");
             return res.status(404).json({
                 success:false,
                 message:"Location not found",
             });
         }
 
+        await client.query(
+            `DELETE FROM visited_city_locations WHERE visited_location_id=$1`,
+            [req.params.id]
+        );
+
+        const insertedCityLocations=await insertCityLocations(client,req.params.id,cityLocations);
+
+        await client.query("COMMIT");
+
         return res.status(200).json({
             success:true,
             message:"Location updated successfully",
-            location:result.rows[0],
+            location:{
+                ...result.rows[0],
+                cityLocations:insertedCityLocations,
+            },
         });
     } catch(error){
+        await client.query("ROLLBACK");
         console.error("Update location error:",error);
 
         return res.status(500).json({
             success:false,
             message:"Failed to update location",
         });
+    } finally {
+        client.release();
     }
 };
 
@@ -195,4 +323,123 @@ const deleteLocation=async(req,res)=>{
     }
 };
 
-module.exports={addLocation,getLocationById,getLocations,updateLocation,deleteLocation};
+const addCityLocation=async(req,res)=>{
+    try{
+        const error=validateCityLocation(req.body);
+
+        if(error){
+            return res.status(400).json({
+                success:false,
+                message:error,
+            });
+        }
+
+        const {name,category,timeOfVisit,duration,review,photoUrl}=req.body;
+
+        const cityCheck=await pool.query(
+            `SELECT id FROM visited_locations WHERE id=$1 AND user_id=$2`,
+            [req.params.locationId,req.user.id]
+        );
+
+        if(cityCheck.rows.length===0){
+            return res.status(404).json({
+                success:false,
+                message:"Visited city not found",
+            });
+        }
+
+        const result=await pool.query(
+            `
+            INSERT INTO visited_city_locations
+            (visited_location_id,name,category,time_of_visit,duration,review,photo_url)
+            VALUES ($1,$2,$3,$4,$5,$6,$7)
+            RETURNING id,visited_location_id AS "visitedLocationId",name,category,time_of_visit AS "timeOfVisit",duration,review,photo_url AS "photoUrl",created_at AS "createdAt",updated_at AS "updatedAt"`,
+            [req.params.locationId,name,category,timeOfVisit,duration,review,photoUrl||null,]
+        );
+
+        return res.status(201).json({
+            success:true,
+            message:"City location added successfully",
+            cityLocation:result.rows[0],
+        });
+    } catch(error) {
+        console.error("Add city location error:",error);
+
+        return res.status(500).json({
+            success:false,
+            message:"Failed to add city location",
+        });
+    }
+};
+
+const getCityLocations=async(req,res)=>{
+    try{
+        const cityCheck=await pool.query(
+            `SELECT id FROM visited_locations WHERE id=$1 AND user_id=$2`,
+            [req.params.locationId,req.user.id]
+        );
+
+        if(cityCheck.rows.length===0){
+            return res.status(404).json({
+                success:false,
+                message:"Visited city not found",
+            });
+        }
+
+        const result=await pool.query(
+            `
+            SELECT id,visited_location_id AS "visitedLocationId",name,category,time_of_visit AS "timeOfVisit",duration,review,photo_url AS "photoUrl",created_at AS "createdAt",updated_at AS "updatedAt"
+            FROM visited_city_locations WHERE visited_location_id=$1 ORDER BY time_of_visit ASC`,
+            [req.params.locationId]
+        );
+
+        return res.status(200).json({
+            success:true,
+            cityLocations:result.rows,
+        });
+    } catch(error) {
+        console.error("Get city locations error:",error);
+
+        return res.status(500).json({
+            success:true,
+            message:"Failed to fetch city locations",
+        });
+    }
+};
+
+const deleteCityLocation=async(req,res)=>{
+    try{
+        const result=await pool.query(
+            `
+            DELETE FROM visited_city_locations vcl
+            USING visited_locations vl
+            WHERE vcl.id=$1
+            AND vcl.visited_location_id=vl.id
+            AND vl.user_id=$2
+            RETURNING vcl.id
+            `,
+            [req.params.cityLocationId,req.user.id]
+        );
+
+        if(result.rows.length===0){
+            return res.status(404).json({
+                success:false,
+                message:"City location not found",
+            });
+        }
+
+        return res.status(200).json({
+            success:true,
+            message:"City location deleted successfully",
+        });
+    } catch(error) {
+        console.error("Delete city location error:",error);
+
+        return res.status(500).json({
+            success:false,
+            message:"Failed to delete city location",
+        });
+    }
+};
+
+module.exports={addLocation,getLocationById,getLocations,updateLocation,deleteLocation,addCityLocation,getCityLocations,deleteCityLocation};
