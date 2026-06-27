@@ -68,17 +68,17 @@ type CountryCityOption = {
 const currentLocationIcon = L.divIcon({
   className: "custom-map-marker current-location-marker",
   html: "<span></span>",
-  iconSize: [28, 28],
-  iconAnchor: [14, 14],
-  popupAnchor: [0, -14],
+  iconSize: [30, 36],
+  iconAnchor: [15, 34],
+  popupAnchor: [0, -32],
 });
 
 const visitedPlaceIcon = L.divIcon({
   className: "custom-map-marker visited-place-marker",
   html: "<span></span>",
-  iconSize: [28, 28],
-  iconAnchor: [14, 14],
-  popupAnchor: [0, -14],
+  iconSize: [30, 36],
+  iconAnchor: [15, 34],
+  popupAnchor: [0, -32],
 });
 
 const emptyForm: PlaceForm = {
@@ -177,7 +177,7 @@ function MapFocus({ place }: { place: VisitedPlace | null }) {
   return null;
 }
 
-function UserDashboard() {
+export function UserDashboard() {
   const navigate = useNavigate();
 
   const [currentLocation, setCurrentLocation] = useState<[number, number] | null>(null);
@@ -747,24 +747,36 @@ function UserDashboard() {
         .custom-map-marker {
           display: grid;
           place-items: center;
-          border-radius: 50% 50% 50% 0;
-          box-shadow: 0 8px 18px rgba(25, 36, 33, 0.24);
+          background: transparent;
         }
 
         .custom-map-marker span {
+          position: relative;
+          width: 26px;
+          height: 26px;
+          display: block;
+          border-radius: 50% 50% 50% 0;
+          box-shadow: 0 8px 18px rgba(25, 36, 33, 0.24);
+          transform: rotate(-45deg);
+        }
+
+        .custom-map-marker span::after {
+          content: "";
+          position: absolute;
+          top: 8px;
+          left: 8px;
           width: 10px;
           height: 10px;
-          display: block;
           border-radius: 50%;
           background: #fff;
         }
 
-        .current-location-marker {
+        .current-location-marker span {
           background: #2563eb;
           border: 3px solid #dbeafe;
         }
 
-        .visited-place-marker {
+        .visited-place-marker span {
           background: #dc2626;
           border: 3px solid #fee2e2;
         }
@@ -1575,3 +1587,6 @@ function UserDashboard() {
 }
 
 export default UserDashboard;
+
+
+
