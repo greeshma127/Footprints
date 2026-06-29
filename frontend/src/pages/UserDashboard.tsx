@@ -13,6 +13,8 @@ type DashboardUser = {
 
 type VisitedPlace = {
   id: string;
+  tripId?: string;
+  tripCountry?: string;
   city: string;
   country: string;
   latitude: number;
@@ -33,20 +35,26 @@ type CityLocation = {
   id: string;
   name: string;
   category: string;
+  visitDate: string;
   timeOfVisit: string;
   duration: string;
   review: string;
   photoUrl?: string;
+  latitude?: number | string | null;
+  longitude?: number | string | null;
 };
 
 type CityLocationForm = {
   id: string;
   name: string;
   category: string;
+  visitDate: string;
   timeOfVisit: string;
   duration: string;
   review: string;
   photoUrl: string;
+  latitude: string;
+  longitude: string;
 };
 
 type PlaceForm = {
@@ -103,10 +111,13 @@ function createEmptyCityLocation(): CityLocationForm {
     id: createId(),
     name: "",
     category: "",
+    visitDate: "",
     timeOfVisit: "",
     duration: "",
     review: "",
     photoUrl: "",
+    latitude: "",
+    longitude: "",
   };
 }
 
@@ -157,10 +168,13 @@ function normalizePlace(place: ApiVisitedPlace): VisitedPlace {
       id: location.id || createId(),
       name: location.name,
       category: location.category,
+      visitDate: location.visitDate || place.visitDate,
       timeOfVisit: location.timeOfVisit,
       duration: location.duration,
       review: location.review,
       photoUrl: location.photoUrl,
+      latitude: location.latitude === null || location.latitude === undefined ? undefined : Number(location.latitude),
+      longitude: location.longitude === null || location.longitude === undefined ? undefined : Number(location.longitude),
     })),
   };
 }
@@ -376,7 +390,10 @@ export function UserDashboard() {
       imageUrl: place.imageUrl || "",
       cityLocations: place.cityLocations.map((location) => ({
         ...location,
+        visitDate: toDateInputValue(location.visitDate || place.visitDate),
         photoUrl: location.photoUrl || "",
+        latitude: location.latitude === null || location.latitude === undefined ? "" : String(location.latitude),
+        longitude: location.longitude === null || location.longitude === undefined ? "" : String(location.longitude),
       })),
     });
     setFormError("");
@@ -462,19 +479,55 @@ export function UserDashboard() {
       id: location.id,
       name: location.name.trim(),
       category: location.category.trim(),
+      visitDate: location.visitDate,
       timeOfVisit: location.timeOfVisit,
       duration: location.duration.trim(),
       review: location.review.trim(),
       photoUrl: location.photoUrl.trim() || undefined,
+      latitude: location.latitude.trim() ? Number(location.latitude) : undefined,
+      longitude: location.longitude.trim() ? Number(location.longitude) : undefined,
     }));
 
     const hasIncompleteCityLocation = cityLocations.some(
       (location) =>
-        !location.name || !location.category || !location.timeOfVisit || !location.duration || !location.review
+        !location.name ||
+        !location.category ||
+        !location.visitDate ||
+        !location.timeOfVisit ||
+        !location.duration ||
+        !location.review
     );
 
     if (hasIncompleteCityLocation) {
-      setFormError("Each city location needs a name, type, time of visit, duration, and review.");
+      setFormError("Each city location needs a name, type, visit date, time of visit, duration, and review.");
+      return;
+    }
+
+    const hasInvalidCityLocationCoordinate = cityLocations.some((location) => {
+      const hasLatitude = location.latitude !== undefined;
+      const hasLongitude = location.longitude !== undefined;
+
+      if (hasLatitude !== hasLongitude) {
+        return true;
+      }
+
+      if (
+        hasLatitude &&
+        (!Number.isFinite(location.latitude) ||
+          !Number.isFinite(location.longitude) ||
+          Number(location.latitude) < -90 ||
+          Number(location.latitude) > 90 ||
+          Number(location.longitude) < -180 ||
+          Number(location.longitude) > 180)
+      ) {
+        return true;
+      }
+
+      return false;
+    });
+
+    if (hasInvalidCityLocationCoordinate) {
+      setFormError("City location coordinates are optional, but latitude and longitude must be valid when provided.");
       return;
     }
 
@@ -670,6 +723,12 @@ export function UserDashboard() {
           align-items: end;
           justify-content: space-between;
           gap: 24px;
+        }
+
+        .dashboard-header-actions {
+          display: flex;
+          align-items: center;
+          gap: 12px;
         }
 
         .dashboard-title {
@@ -1180,6 +1239,14 @@ export function UserDashboard() {
             gap: 14px;
           }
 
+          .dashboard-header-actions {
+            width: 100%;
+          }
+
+          .dashboard-header-actions .button {
+            flex: 1;
+          }
+
           .stats-grid,
           .form-grid {
             grid-template-columns: 1fr;
@@ -1221,9 +1288,14 @@ export function UserDashboard() {
             {locationError && <p className="location-error">{locationError}</p>}
           </div>
 
-          <button className="button primary" type="button" onClick={openAddModal}>
-            Add visited place
-          </button>
+          <div className="dashboard-header-actions">
+            <button className="button" type="button" onClick={() => navigate("/timeline")}>
+              Timeline
+            </button>
+            <button className="button primary" type="button" onClick={openAddModal}>
+              Add visited place
+            </button>
+          </div>
         </section>
 
         <section className="stats-grid" aria-label="Travel stats">
@@ -1286,7 +1358,8 @@ export function UserDashboard() {
                         <ul>
                           {place.cityLocations.slice(0, 4).map((location) => (
                             <li key={location.id}>
-                              {location.name} ({location.category}) at {location.timeOfVisit}
+                              {location.name} ({location.category}) on {formatDate(location.visitDate)} at{" "}
+                              {location.timeOfVisit}
                             </li>
                           ))}
                         </ul>
@@ -1521,6 +1594,16 @@ export function UserDashboard() {
                           </div>
 
                           <div className="field">
+                            <label htmlFor={`location-date-${location.id}`}>Visit date</label>
+                            <input
+                              id={`location-date-${location.id}`}
+                              type="date"
+                              value={location.visitDate}
+                              onChange={(event) => updateCityLocation(location.id, "visitDate", event.target.value)}
+                            />
+                          </div>
+
+                          <div className="field">
                             <label htmlFor={`location-time-${location.id}`}>Time of visit</label>
                             <input
                               id={`location-time-${location.id}`}
@@ -1537,6 +1620,34 @@ export function UserDashboard() {
                               value={location.duration}
                               onChange={(event) => updateCityLocation(location.id, "duration", event.target.value)}
                               placeholder="2 hours"
+                            />
+                          </div>
+
+                          <div className="field">
+                            <label htmlFor={`location-latitude-${location.id}`}>Location latitude</label>
+                            <input
+                              id={`location-latitude-${location.id}`}
+                              type="number"
+                              step="any"
+                              min="-90"
+                              max="90"
+                              value={location.latitude}
+                              onChange={(event) => updateCityLocation(location.id, "latitude", event.target.value)}
+                              placeholder="Optional"
+                            />
+                          </div>
+
+                          <div className="field">
+                            <label htmlFor={`location-longitude-${location.id}`}>Location longitude</label>
+                            <input
+                              id={`location-longitude-${location.id}`}
+                              type="number"
+                              step="any"
+                              min="-180"
+                              max="180"
+                              value={location.longitude}
+                              onChange={(event) => updateCityLocation(location.id, "longitude", event.target.value)}
+                              placeholder="Optional"
                             />
                           </div>
 
