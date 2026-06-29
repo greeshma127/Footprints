@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import axios from "axios";
 import api from "../../services/api";
 
 function Login() {
@@ -27,7 +28,11 @@ function Login() {
       navigate("/dashboard");
     } catch (error) {
       console.error(error);
-      setMessage("Login failed. Check your details and try again.");
+      const apiMessage =
+        axios.isAxiosError<{ message?: string }>(error) && error.response?.data?.message
+          ? error.response.data.message
+          : "";
+      setMessage(apiMessage || "Login failed. Check your details and try again.");
     } finally {
       setIsSubmitting(false);
     }
