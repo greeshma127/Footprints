@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
+import { isAdminEmail } from "../../config/admin";
 import api from "../../services/api";
 
 function Login() {
@@ -22,10 +23,15 @@ function Login() {
       });
 
       console.log(response.data);
+      const loggedInUser = {
+        ...response.data.user,
+        isAdmin: Boolean(response.data.user?.isAdmin || isAdminEmail(response.data.user?.email)),
+      };
+
       localStorage.setItem("footprints_token", response.data.token);
-      localStorage.setItem("footprints_user", JSON.stringify(response.data.user));
+      localStorage.setItem("footprints_user", JSON.stringify(loggedInUser));
       setMessage("Welcome back. Your map is ready.");
-      navigate("/dashboard");
+      navigate(loggedInUser.isAdmin ? "/admin-dashboard" : "/dashboard");
     } catch (error) {
       console.error(error);
       const apiMessage =

@@ -1,6 +1,7 @@
 const bcrypt=require("bcrypt");
 const jwt=require("jsonwebtoken");
 const pool=require("../config/database");
+const {isAdminEmail}=require("../config/admin");
 
 const signupUser=async(req,res)=>{
     try{
@@ -90,6 +91,7 @@ const loginUser=async(req,res)=>{
                 id:user.id,
                 name:user.name,
                 email:user.email,
+                isAdmin:isAdminEmail(user.email),
             },
         });
     } catch(error){

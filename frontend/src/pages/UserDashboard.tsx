@@ -3,12 +3,14 @@ import { useNavigate } from "react-router-dom";
 import L from "leaflet";
 import { MapContainer, Marker, Popup, TileLayer, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
+import { isAdminEmail } from "../config/admin";
 import api from "../services/api";
 
 type DashboardUser = {
   id: string;
   name: string;
   email: string;
+  isAdmin?: boolean;
 };
 
 type VisitedPlace = {
@@ -265,6 +267,11 @@ export function UserDashboard() {
 
       if (!token) {
         navigate("/");
+        return;
+      }
+
+      if (user?.isAdmin || isAdminEmail(user?.email)) {
+        navigate("/admin-dashboard");
         return;
       }
 
