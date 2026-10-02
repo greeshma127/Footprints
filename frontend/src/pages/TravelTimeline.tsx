@@ -4,6 +4,8 @@ import L from "leaflet";
 import { MapContainer, Marker, Polyline, Popup, TileLayer, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import api from "../services/api";
+import TripManager from "../components/TripManager";
+import { type Trip } from "../services/trips";
 
 type TimelineUser = {
   id: string;
@@ -27,7 +29,7 @@ type CityLocation = {
 type VisitedPlace = {
   id: string;
   tripId?: string;
-  tripCountry?: string;
+  tripName?: string;
   city: string;
   country: string;
   latitude: number;
@@ -45,6 +47,7 @@ type ApiVisitedPlace = Omit<VisitedPlace, "latitude" | "longitude"> & {
 };
 
 type TimelineStop = {
+  tripId: string;
   id: string;
   cityLocationId?: string;
   cityId: string;
@@ -176,6 +179,8 @@ function RouteBounds({ positions }: { positions: [number, number][] }) {
 
 export function TravelTimeline() {
   const navigate = useNavigate();
+  const [trips, setTrips] = useState<Trip[]>([]);
+  const [selectedTripId, setSelectedTripId] = useState("");
   const [visitedPlaces, setVisitedPlaces] = useState<VisitedPlace[]>([]);
   const [resolvedCoordinates, setResolvedCoordinates] = useState<Record<string, Coordinates>>({});
   const [selectedStopId, setSelectedStopId] = useState<string | null>(null);
@@ -199,7 +204,7 @@ export function TravelTimeline() {
   const displayName = user?.name || "Traveler";
 
   const timelineStops = useMemo<TimelineStop[]>(() => {
-    const stops = visitedPlaces.flatMap<TimelineStop>((place) => {
+    const stops = visitedPlaces.filter(place => !selectedTripId || place.tripId === selectedTripId).flatMap<TimelineStop>((place) => {
       const cityLatitude = Number(place.latitude);
       const cityLongitude = Number(place.longitude);
 
@@ -211,11 +216,12 @@ export function TravelTimeline() {
         return [
           {
             id: `city-${place.id}`,
+            tripId: place.tripId || place.id,
             cityId: place.id,
             name: place.city,
             category: "City visit",
             city: place.city,
-            country: place.tripCountry || place.country,
+            country: place.country,
             visitDate: place.visitDate,
             notes: place.notes,
             latitude: cityLatitude,
@@ -233,12 +239,13 @@ export function TravelTimeline() {
 
         return {
           id: `city-location-${location.id}`,
+          tripId: place.tripId || place.id,
           cityLocationId: location.id,
           cityId: place.id,
           name: location.name,
           category: location.category,
           city: place.city,
-          country: place.tripCountry || place.country,
+          country: place.country,
           visitDate: location.visitDate || place.visitDate,
           timeOfVisit: location.timeOfVisit,
           notes: location.review,
@@ -261,7 +268,7 @@ export function TravelTimeline() {
 
       return (a.timeOfVisit || "").localeCompare(b.timeOfVisit || "");
     });
-  }, [visitedPlaces]);
+  }, [visitedPlaces, selectedTripId]);
 
   const displayTimelineStops = useMemo(
     () => createDisplayStops(timelineStops, resolvedCoordinates),
@@ -272,6 +279,16 @@ export function TravelTimeline() {
     () => displayTimelineStops.map((stop) => [stop.displayLatitude, stop.displayLongitude]),
     [displayTimelineStops]
   );
+
+  const tripRoutes = useMemo(() => {
+    const routes = new Map<string, [number, number][]>();
+    for (const stop of displayTimelineStops) {
+      const positions = routes.get(stop.tripId) || [];
+      positions.push([stop.displayLatitude, stop.displayLongitude]);
+      routes.set(stop.tripId, positions);
+    }
+    return [...routes.entries()].filter(([, positions]) => positions.length > 1);
+  }, [displayTimelineStops]);
 
   const selectedStop = useMemo(
     () =>
@@ -352,7 +369,8 @@ export function TravelTimeline() {
       setError("");
 
       try {
-        const response = await api.get<{ locations: ApiVisitedPlace[] }>("/api/locations");
+        const [response, tripsResponse] = await Promise.all([api.get<{ locations: ApiVisitedPlace[] }>("/api/locations"), api.get<{ trips: Trip[] }>("/api/trips")]);
+        setTrips(tripsResponse.data.trips);
         const places = response.data.locations.map(normalizePlace);
         setResolvedCoordinates({});
         setVisitedPlaces(places);
@@ -848,7 +866,7 @@ export function TravelTimeline() {
           <div>
             <h1 className="timeline-title">Travel timeline</h1>
             <p className="timeline-copy">
-              Every saved city location connected in the order you visited it, across all countries and cities.
+              Follow each trip in visit order, across countries and cities. Select a trip to explore its route.
             </p>
             {error && <p className="timeline-error">{error}</p>}
           </div>
@@ -862,6 +880,8 @@ export function TravelTimeline() {
             </button>
           </div>
         </section>
+
+        <TripManager trips={trips} selectedId={selectedTripId} onSelect={id => { setSelectedTripId(id); setSelectedStopId(null); }} />
 
         <section className="timeline-stats" aria-label="Timeline stats">
           <div className="timeline-stat">
@@ -897,9 +917,10 @@ export function TravelTimeline() {
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
               />
 
-              {routePositions.length > 1 && (
+              {tripRoutes.map(([tripId, positions]) => (
                 <Polyline
-                  positions={routePositions}
+                  key={tripId}
+                  positions={positions}
                   pathOptions={{
                     color: "#2f6f5e",
                     dashArray: "10 12",
@@ -909,7 +930,7 @@ export function TravelTimeline() {
                     weight: 4,
                   }}
                 />
-              )}
+              ))}
 
               {displayTimelineStops.map((stop, index) => (
                 <Marker

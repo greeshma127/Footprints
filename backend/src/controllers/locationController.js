@@ -1,4 +1,5 @@
 const pool=require("../config/database");
+const {requireTrip}=require("./tripController");
 
 const validateLocation=(body)=>{
     const {city,country,latitude,longitude,visitDate,notes}=body;
@@ -69,31 +70,6 @@ const normalizeOptionalCoordinate=(value)=>{
     }
 
     return Number(value);
-};
-
-const getOrCreateTrip=async(client,userId,country)=>{
-    const existingTrip=await client.query(
-        `
-        SELECT id,user_id AS "userId",country_name AS "countryName",created_at AS "createdAt",updated_at AS "updatedAt"
-        FROM trips
-        WHERE user_id=$1 AND LOWER(country_name)=LOWER($2)
-        LIMIT 1`,
-        [userId,country]
-    );
-
-    if(existingTrip.rows.length>0){
-        return existingTrip.rows[0];
-    }
-
-    const result=await client.query(
-        `
-        INSERT INTO trips (user_id,country_name)
-        VALUES ($1,$2)
-        RETURNING id,user_id AS "userId",country_name AS "countryName",created_at AS "createdAt",updated_at AS "updatedAt"`,
-        [userId,country]
-    );
-
-    return result.rows[0];
 };
 
 const insertCityLocations=async(client,locationId,cityLocations=[])=>{
@@ -176,7 +152,7 @@ const addLocation=async(req,res)=>{
 
         await client.query("BEGIN");
 
-        const trip=await getOrCreateTrip(client,req.user.id,country);
+        const trip=await requireTrip(client,req.user.id,req.body.tripId,[visitDate,...cityLocations.map(location=>location.visitDate)]);
 
         const result=await client.query(`INSERT INTO visited_locations (user_id,trip_id,city,country,latitude,longitude,visit_date,notes,image_url)
             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
@@ -208,11 +184,11 @@ const addLocation=async(req,res)=>{
         });
     } catch(error){
         await client.query("ROLLBACK");
-        console.error("Add location error:",error);
+        if (!error.status) console.error("Add location error:",error);
 
-        return res.status(500).json({
+        return res.status(error.status || 500).json({
             success:false,
-            message:"Failed to add location",
+            message:error.status ? error.message : "Failed to add location",
         });
     } finally {
         client.release();
@@ -225,7 +201,7 @@ const getLocations=async(req,res)=>{
             `
             SELECT
             vl.id, vl.trip_id AS "tripId", vl.city, vl.country, vl.latitude, vl.longitude, vl.visit_date AS "visitDate",vl.notes,vl.image_url AS "imageUrl",vl.created_at AS "createdAt",vl.updated_at AS "updatedAt",
-            t.country_name AS "tripCountry"
+            t.name AS "tripName", to_char(t.start_date, 'YYYY-MM-DD') AS "tripStartDate", to_char(t.end_date, 'YYYY-MM-DD') AS "tripEndDate"
             FROM visited_locations vl
             LEFT JOIN trips t ON t.id=vl.trip_id
             WHERE vl.user_id=$1
@@ -253,7 +229,7 @@ const getLocationById=async(req,res)=>{
         const result=await pool.query(
             `
             SELECT vl.id,vl.trip_id AS "tripId",vl.city,vl.country,vl.latitude,vl.longitude,vl.visit_date AS "visitDate",vl.notes,vl.image_url AS "imageUrl",vl.created_at AS "createdAt",vl.updated_at AS "updatedAt",
-            t.country_name AS "tripCountry"
+            t.name AS "tripName", to_char(t.start_date, 'YYYY-MM-DD') AS "tripStartDate", to_char(t.end_date, 'YYYY-MM-DD') AS "tripEndDate"
             FROM visited_locations vl
             LEFT JOIN trips t ON t.id=vl.trip_id
             WHERE vl.id=$1 AND vl.user_id=$2`, [req.params.id,req.user.id]
@@ -310,8 +286,10 @@ const updateLocation=async(req,res)=>{
         const {city,country,latitude,longitude,visitDate,notes,imageUrl,cityLocations=[]}=req.body;
 
         await client.query("BEGIN");
+        const ownedLocation=await client.query('SELECT id FROM visited_locations WHERE id=$1 AND user_id=$2 FOR UPDATE',[req.params.id,req.user.id]);
+        if (!ownedLocation.rows.length) throw Object.assign(new Error('Location not found'), {status:404});
 
-        const trip=await getOrCreateTrip(client,req.user.id,country);
+        const trip=await requireTrip(client,req.user.id,req.body.tripId,[visitDate,...cityLocations.map(location=>location.visitDate)]);
 
         const result=await client.query(
             `
@@ -359,11 +337,11 @@ const updateLocation=async(req,res)=>{
         });
     } catch(error){
         await client.query("ROLLBACK");
-        console.error("Update location error:",error);
+        if (!error.status) console.error("Update location error:",error);
 
-        return res.status(500).json({
+        return res.status(error.status || 500).json({
             success:false,
-            message:"Failed to update location",
+            message:error.status ? error.message : "Failed to update location",
         });
     } finally {
         client.release();
@@ -399,63 +377,23 @@ const deleteLocation=async(req,res)=>{
 };
 
 const addCityLocation=async(req,res)=>{
-    try{
+    let client;
+    try {
         const error=validateCityLocation(req.body);
-
-        if(error){
-            return res.status(400).json({
-                success:false,
-                message:error,
-            });
-        }
-
-        const {name,category,visitDate,timeOfVisit,duration,review,photoUrl,latitude,longitude}=req.body;
-
-        const cityCheck=await pool.query(
-            `SELECT id FROM visited_locations WHERE id=$1 AND user_id=$2`,
-            [req.params.locationId,req.user.id]
-        );
-
-        if(cityCheck.rows.length===0){
-            return res.status(404).json({
-                success:false,
-                message:"Visited city not found",
-            });
-        }
-
-        const result=await pool.query(
-            `
-            INSERT INTO visited_city_locations
-            (visited_location_id,name,category,visit_date,time_of_visit,duration,review,photo_url,latitude,longitude)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-            RETURNING id,visited_location_id AS "visitedLocationId",name,category,visit_date AS "visitDate",time_of_visit AS "timeOfVisit",duration,review,photo_url AS "photoUrl",latitude,longitude,created_at AS "createdAt",updated_at AS "updatedAt"`,
-            [
-                req.params.locationId,
-                name,
-                category,
-                visitDate,
-                timeOfVisit,
-                duration,
-                review,
-                photoUrl||null,
-                normalizeOptionalCoordinate(latitude),
-                normalizeOptionalCoordinate(longitude),
-            ]
-        );
-
-        return res.status(201).json({
-            success:true,
-            message:"City location added successfully",
-            cityLocation:result.rows[0],
-        });
+        if(error) return res.status(400).json({success:false,message:error});
+        client=await pool.connect();
+        await client.query('BEGIN');
+        const city=await client.query('SELECT trip_id FROM visited_locations WHERE id=$1 AND user_id=$2 FOR UPDATE',[req.params.locationId,req.user.id]);
+        if(!city.rows.length) throw Object.assign(new Error('Visited city not found'),{status:404});
+        await requireTrip(client,req.user.id,city.rows[0].trip_id,[req.body.visitDate]);
+        const locations=await insertCityLocations(client,req.params.locationId,[req.body]);
+        await client.query('COMMIT');
+        return res.status(201).json({success:true,cityLocation:locations[0]});
     } catch(error) {
-        console.error("Add city location error:",error);
-
-        return res.status(500).json({
-            success:false,
-            message:"Failed to add city location",
-        });
-    }
+        if(client) await client.query('ROLLBACK');
+        if (!error.status) console.error('Add city location error:',error);
+        return res.status(error.status || 500).json({success:false,message:error.status ? error.message : 'Failed to add city location'});
+    } finally { if(client) client.release(); }
 };
 
 const getCityLocations=async(req,res)=>{

@@ -5,6 +5,8 @@ import { MapContainer, Marker, Popup, TileLayer, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { isAdminEmail } from "../config/admin";
 import api from "../services/api";
+import TripManager from "../components/TripManager";
+import { apiError, tripLabel, type Trip } from "../services/trips";
 
 type DashboardUser = {
   id: string;
@@ -16,7 +18,7 @@ type DashboardUser = {
 type VisitedPlace = {
   id: string;
   tripId?: string;
-  tripCountry?: string;
+  tripName?: string;
   city: string;
   country: string;
   latitude: number;
@@ -60,6 +62,7 @@ type CityLocationForm = {
 };
 
 type PlaceForm = {
+  tripId: string;
   city: string;
   country: string;
   latitude: string;
@@ -92,6 +95,7 @@ const visitedPlaceIcon = L.divIcon({
 });
 
 const emptyForm: PlaceForm = {
+  tripId: "",
   city: "",
   country: "",
   latitude: "",
@@ -200,6 +204,8 @@ export function UserDashboard() {
   const [locationError, setLocationError] = useState(() =>
     typeof navigator !== "undefined" && !navigator.geolocation ? "Geolocation is not supported by your browser" : ""
   );
+  const [trips, setTrips] = useState<Trip[]>([]);
+  const [selectedTripId, setSelectedTripId] = useState("");
   const [visitedPlaces, setVisitedPlaces] = useState<VisitedPlace[]>([]);
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingPlaceId, setEditingPlaceId] = useState<string | null>(null);
@@ -228,12 +234,16 @@ export function UserDashboard() {
 
   const displayName = user?.name || "Traveler";
 
+  const filteredPlaces = useMemo(() => visitedPlaces.filter(place => !selectedTripId || place.tripId === selectedTripId), [visitedPlaces, selectedTripId]);
+  const formTrip = trips.find(trip => trip.id === form.tripId);
+  const selectTrip = (id: string) => { setSelectedTripId(id); setSelectedPlaceId(null); };
+
   const sortedPlaces = useMemo(
     () =>
-      [...visitedPlaces].sort(
+      [...filteredPlaces].sort(
         (a, b) => new Date(b.visitDate).getTime() - new Date(a.visitDate).getTime()
       ),
-    [visitedPlaces]
+    [filteredPlaces]
   );
 
   const selectedPlace = useMemo(
@@ -247,19 +257,19 @@ export function UserDashboard() {
   }, [countryCityOptions, form.country]);
 
   const stats = useMemo(() => {
-    const countries = new Set(visitedPlaces.map((place) => place.country.trim().toLowerCase()));
+    const countries = new Set(filteredPlaces.map((place) => place.country.trim().toLowerCase()));
     const cities = new Set(
-      visitedPlaces.map((place) => `${place.city.trim().toLowerCase()},${place.country.trim().toLowerCase()}`)
+      filteredPlaces.map((place) => `${place.city.trim().toLowerCase()},${place.country.trim().toLowerCase()}`)
     );
     const mostRecentTrip = sortedPlaces[0];
 
     return {
-      totalPlaces: visitedPlaces.length,
+      totalPlaces: filteredPlaces.length,
       totalCountries: countries.size,
       totalCities: cities.size,
       mostRecentTrip: mostRecentTrip ? `${mostRecentTrip.city}, ${mostRecentTrip.country}` : "No trips yet",
     };
-  }, [sortedPlaces, visitedPlaces]);
+  }, [sortedPlaces, filteredPlaces]);
 
   useEffect(() => {
     const loadSavedPlaces = async () => {
@@ -278,7 +288,8 @@ export function UserDashboard() {
       setIsLoadingSavedPlaces(true);
 
       try {
-        const response = await api.get<{ locations: ApiVisitedPlace[] }>("/api/locations");
+        const [response, tripsResponse] = await Promise.all([api.get<{ locations: ApiVisitedPlace[] }>("/api/locations"), api.get<{ trips: Trip[] }>("/api/trips")]);
+        setTrips(tripsResponse.data.trips);
         setVisitedPlaces(response.data.locations.map(normalizePlace));
       } catch (error) {
         console.error(error);
@@ -289,7 +300,7 @@ export function UserDashboard() {
     };
 
     loadSavedPlaces();
-  }, [navigate]);
+  }, [navigate, user?.email, user?.isAdmin]);
 
   useEffect(() => {
     const loadCountryCityOptions = async () => {
@@ -374,7 +385,7 @@ export function UserDashboard() {
   }, []);
 
   const resetForm = () => {
-    setForm(emptyForm);
+    setForm({ ...emptyForm, tripId: selectedTripId || trips[0]?.id || "" });
     setFormError("");
     setPlaceLookupMessage("");
     setEditingPlaceId(null);
@@ -388,6 +399,7 @@ export function UserDashboard() {
   const openEditModal = (place: VisitedPlace) => {
     setEditingPlaceId(place.id);
     setForm({
+      tripId: place.tripId || "",
       city: place.city,
       country: place.country,
       latitude: String(place.latitude),
@@ -538,7 +550,12 @@ export function UserDashboard() {
       return;
     }
 
+    if (!formTrip) { setFormError("Create and select a trip before adding a place."); return; }
+    if ([form.visitDate, ...cityLocations.map(location => location.visitDate)].some(date => date < formTrip.startDate || date > formTrip.endDate)) {
+      setFormError("Every visit date must fall within the selected trip's date range."); return;
+    }
     const placePayload = {
+      tripId: form.tripId,
       city: form.city.trim(),
       country: form.country.trim(),
       latitude,
@@ -565,11 +582,12 @@ export function UserDashboard() {
           ? currentPlaces.map((currentPlace) => (currentPlace.id === editingPlaceId ? savedPlace : currentPlace))
           : [...currentPlaces, savedPlace]
       );
+      setSelectedTripId(form.tripId);
       setSelectedPlaceId(savedPlace.id);
       closeModal();
     } catch (error) {
       console.error(error);
-      setFormError("Could not save this place to the database. Please try again.");
+      setFormError(apiError(error, "Could not save this place. Please try again."));
     } finally {
       setIsSavingPlace(false);
     }
@@ -1299,11 +1317,16 @@ export function UserDashboard() {
             <button className="button" type="button" onClick={() => navigate("/timeline")}>
               Timeline
             </button>
-            <button className="button primary" type="button" onClick={openAddModal}>
+            <button className="button primary" type="button" onClick={openAddModal} disabled={!trips.length}>
               Add visited place
             </button>
           </div>
         </section>
+
+        <TripManager trips={trips} selectedId={selectedTripId} onSelect={selectTrip} onSaved={trip => {
+          setTrips(current => [...current.filter(item => item.id !== trip.id), trip].sort((a, b) => b.startDate.localeCompare(a.startDate)));
+          selectTrip(trip.id);
+        }} />
 
         <section className="stats-grid" aria-label="Travel stats">
           <div className="stat-card">
@@ -1345,7 +1368,7 @@ export function UserDashboard() {
                 </Marker>
               )}
 
-              {visitedPlaces.map((place) => (
+              {filteredPlaces.map((place) => (
                 <Marker
                   key={place.id}
                   position={[place.latitude, place.longitude]}
@@ -1406,7 +1429,7 @@ export function UserDashboard() {
                     <strong>
                       {place.city}, {place.country}
                     </strong>
-                    <span className="timeline-date">{formatDate(place.visitDate)}</span>
+                    <span className="timeline-date">{trips.find(trip => trip.id === place.tripId)?.name} | {formatDate(place.visitDate)}</span>
                     <p className="timeline-notes">{place.notes}</p>
                     <span className="timeline-location-count">
                       {place.cityLocations.length} {place.cityLocations.length === 1 ? "city stop" : "city stops"}
@@ -1456,6 +1479,13 @@ export function UserDashboard() {
 
             <form className="place-form" onSubmit={handleSubmitPlace}>
               <div className="form-grid">
+                <div className="field">
+                  <label htmlFor="place-trip">Trip</label>
+                  <select id="place-trip" required value={form.tripId} onChange={event => handleFormChange("tripId", event.target.value)}>
+                    <option value="">Select a trip</option>
+                    {trips.map(trip => <option key={trip.id} value={trip.id}>{tripLabel(trip)}</option>)}
+                  </select>
+                </div>
                 <div className="field">
                   <label htmlFor="country">Country</label>
                   <select
@@ -1528,6 +1558,8 @@ export function UserDashboard() {
                   <label htmlFor="visit-date">Visit date</label>
                   <input
                     id="visit-date"
+                    min={formTrip?.startDate}
+                    max={formTrip?.endDate}
                     type="date"
                     value={form.visitDate}
                     onChange={(event) => handleFormChange("visitDate", event.target.value)}
@@ -1604,6 +1636,8 @@ export function UserDashboard() {
                             <label htmlFor={`location-date-${location.id}`}>Visit date</label>
                             <input
                               id={`location-date-${location.id}`}
+                              min={formTrip?.startDate}
+                              max={formTrip?.endDate}
                               type="date"
                               value={location.visitDate}
                               onChange={(event) => updateCityLocation(location.id, "visitDate", event.target.value)}

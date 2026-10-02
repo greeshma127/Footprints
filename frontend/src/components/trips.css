@@ -1,0 +1,10 @@
+.trip-panel { margin: 0 0 24px; padding: 20px; border: 1px solid #dce4e0; border-radius: 18px; background: #fff; color: #243d34; }
+.trip-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
+.trip-panel select, .trip-panel input { padding: 10px 12px; border: 1px solid #bacbc1; border-radius: 8px; font: inherit; background: #fff; color: #243d34; min-width: 0; }
+.trip-toolbar select { flex: 1; max-width: 100%; }
+.trip-panel button { padding: 10px 16px; border: 1px solid #bacbc1; border-radius: 8px; background: #edf5ee; color: #243d34; font: inherit; cursor: pointer; }
+.trip-panel button:disabled { opacity: .6; cursor: wait; }
+.trip-form { display: grid; gap: 10px; max-width: 560px; margin-top: 20px; }
+.trip-form h2 { margin: 0 0 8px; font-size: 20px; }
+.trip-form [role=alert] { color: #a52a2a; }
+@media (max-width: 600px) { .trip-toolbar select { flex-basis: 100%; width: 100%; } }

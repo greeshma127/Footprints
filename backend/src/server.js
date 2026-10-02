@@ -14,6 +14,7 @@ app.use(express.json());
 
 app.use("/api/auth",authRoutes);
 app.use("/api/locations",locationRoutes);
+app.use("/api/trips",require("./routes/tripRoutes"));
 app.use("/api/admin",adminRoutes);
 
 app.get("/", (req, res) => {
